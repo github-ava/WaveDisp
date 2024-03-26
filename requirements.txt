@@ -1,0 +1,8 @@
+joblib
+matplotlib
+mpi4py
+numpy
+psutil
+scikit-learn
+scipy
+tensorflow
