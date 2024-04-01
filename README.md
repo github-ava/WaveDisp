@@ -66,7 +66,7 @@ To use classical optimization (e.g., gradient-based methods), run this test:
 python test/TestOptimization.py
 ```
 
-![Alt Text](image/Optimization.jpg)
+![Alt Text](image/optimization.jpg)
 
 ## Dispersion curves (theoretical/effective)
 
