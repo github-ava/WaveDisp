@@ -17,7 +17,7 @@ wave dispersion properties based on input parameters.
   dispersion properties.
 - **Predict Wave Dispersion:** Use trained models to predict wave dispersion properties based on input parameters,
   enabling fast and accurate analysis of layered media.
-- **Classical optimization:** Use classical optimization for inverting dispersion curves or use it in conjunction with
+- **Classical Optimization:** Use classical optimization for inverting dispersion curves or use it in conjunction with
   neural network predictions.
 
 ## Generate Synthetic Data (multiprocessing/MPI)
@@ -43,7 +43,7 @@ Sample generated data is shown below:
 
 The training test trains the model and predicts the output for specific benchmarks, saving the prediction plots and
 training history in the output directory. To specify whether to use CPU or GPU for training, relevant arguments can be
-set in the test for CUDA visibility
+set in the test for CUDA visibility.
 
 ```bash
 python test/TestTraining.py
