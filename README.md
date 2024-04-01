@@ -17,7 +17,7 @@ wave dispersion properties based on input parameters.
   dispersion properties.
 - **Predict Wave Dispersion:** Use trained models to predict wave dispersion properties based on input parameters,
   enabling fast and accurate analysis of layered media.
-- **Classical optimization:**Use classical optimization for inverting dispersion curves or use it in conjunction with
+- **Classical optimization:** Use classical optimization for inverting dispersion curves or use it in conjunction with
   neural network predictions.
 
 ## Generate Synthetic Data (multiprocessing/MPI)
