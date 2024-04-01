@@ -17,8 +17,8 @@ wave dispersion properties based on input parameters.
   dispersion properties.
 - **Predict Wave Dispersion:** Use trained models to predict wave dispersion properties based on input parameters,
   enabling fast and accurate analysis of layered media.
-- **Classical Optimization:** Use classical optimization for inverting dispersion curves or use it in conjunction with
-  neural network predictions.
+- **Conventional Optimization:** Use conventional optimization for inverting dispersion curves or use it in conjunction
+  with neural network predictions.
 
 ## Generate Synthetic Data (multiprocessing/MPI)
 
@@ -49,7 +49,7 @@ set in the test for CUDA visibility.
 python test/TestTraining.py
 ```
 
-By enabling the optimization feature in the test, classical optimization can be performed after obtaining network
+By enabling the optimization feature in the test, conventional optimization can be performed after obtaining network
 predictions. To use MPI on multiple machines and perform many experiments simultaneously for hyperparameter tuning, use:
 
 ```bash
@@ -58,9 +58,9 @@ mpiexec -n <num_ranks> python test/TestTraining.py
 
 ![Alt Text](image/prediction.jpg)
 
-## Classical Optimization
+## Conventional Optimization
 
-To use classical optimization (e.g., gradient-based methods), run this test:
+To use conventional optimization (e.g., gradient-based methods), run this test:
 
 ```bash
 python test/TestOptimization.py
