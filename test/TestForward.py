@@ -9,6 +9,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 os.chdir(os.path.dirname(__file__))
 from src.Utilities import Parameters
 from src.WaveDisp import WaveDisp
+from src.ForwardProb import ForwardHS_First, ForwardHS_Eff
 
 
 def test_forward():
@@ -160,5 +161,31 @@ def test_forward():
         plt.show()
 
 
+def test_forward_first_mode():
+    params = np.array([300., 200., 400., 500., 6., 4., 8.])
+    w, cp = ForwardHS_First(params)
+
+    plt.plot(w, cp, 'o', color='b', linewidth=1.5)
+    plt.xlabel('Frequency (Hz)')
+    plt.ylabel('Phase Velocity (m/s)')
+    plt.xlim(0, max(w))
+    plt.box(True)
+    plt.show()
+
+
+def test_forward_eff_curve():
+    params = np.array([300., 200., 400., 500., 6., 4., 8.])
+    w, cpE = ForwardHS_Eff(params)
+
+    plt.plot(w, cpE, 'o', color='b', linewidth=1.5)
+    plt.xlabel('Frequency (Hz)')
+    plt.ylabel('Effective Phase Velocity (m/s)')
+    plt.xlim(0, max(w))
+    plt.box(True)
+    plt.show()
+
+
 if __name__ == "__main__":
     test_forward()
+    # test_forward_first_mode()
+    # test_forward_eff_curve()

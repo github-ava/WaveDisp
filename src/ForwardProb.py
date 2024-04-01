@@ -4,30 +4,31 @@ import pickle
 import shutil
 import traceback
 import warnings
+from functools import partial
 from multiprocessing import Pool
-from time import time
+from time import time, sleep
 from typing import List, Tuple
 
 import matplotlib.pyplot as plt
 import numpy as np
 from psutil import cpu_count
 
-from src.Utilities import Parameters, ParametersNN
+from src.Utilities import Parameters, ParametersNN, ParametersOpt
 from src.WaveDisp import WaveDisp
+from src.Optimization import WaveDispOptim
 
 
-def initialize_params(params: List[float]) -> Parameters:
+def initialize_params(params: np.ndarray) -> Parameters:
     """
     Initializes parameters for the finite element method (FEM) or complex finite element method (CFEM).
 
     Parameters:
-    - params (List[float]): List of parameters including layer shear wave velocity, bottom half-space shear wave velocity,
+    - params (np.ndarray): Array of parameters including layer shear wave velocity, bottom half-space shear wave velocity,
                             layer thickness, and number of elements per layer.
 
     Returns:
     - Parameters: An instance of the Parameters class with initialized parameters.
     """
-
     Pr = Parameters()
     nu = 0.35
     rho = 1800
@@ -40,7 +41,7 @@ def initialize_params(params: List[float]) -> Parameters:
     # ------------- for FEM-quartic
     Pr.fem = 'fem'  # Method: fem or cfem (Complex-FEM)
     num_el = np.ones_like(cs, dtype=int)
-    order = np.ceil(h).astype(int)
+    order = np.ceil(h * 1.2).astype(int)
     order[order < 4] = 4
     order[order > 10] = 10
     # ------------- for CFEM
@@ -69,18 +70,17 @@ def initialize_params(params: List[float]) -> Parameters:
     return Pr
 
 
-def ForwardHS_First(params: List[float]) -> Tuple[np.ndarray, np.ndarray]:
+def ForwardHS_First(params: np.ndarray) -> Tuple[np.ndarray, np.ndarray]:
     """
     Computes the forward modeling for the first mode of the half-space using the specified parameters.
 
     Parameters:
-    - params (List[float]): List of parameters including layer shear wave velocity, bottom half-space shear wave velocity,
+    - params (np.ndarray): Array of parameters including layer shear wave velocity, bottom half-space shear wave velocity,
                             layer thickness, and number of elements per layer.
 
     Returns:
     - Tuple[np.ndarray, np.ndarray]: A tuple containing the frequency array (w) and the corresponding phase velocity array (cpT).
     """
-
     Pr = initialize_params(params)
     Pr.eff = 'no'
     Pr.cg = 'no'
@@ -105,18 +105,17 @@ def ForwardHS_First(params: List[float]) -> Tuple[np.ndarray, np.ndarray]:
     return Pr.w, cpT[0]
 
 
-def ForwardHS_Eff(params: List[float]) -> Tuple[np.ndarray, np.ndarray]:
+def ForwardHS_Eff(params: np.ndarray) -> Tuple[np.ndarray, np.ndarray]:
     """
     Computes the effective forward modeling using the specified parameters.
 
     Parameters:
-    - params (List[float]): List of parameters including layer shear wave velocity, bottom half-space shear wave velocity,
+    - params (np.ndarray): Array of parameters including layer shear wave velocity, bottom half-space shear wave velocity,
                             layer thickness, and number of elements per layer.
 
     Returns:
     - Tuple[np.ndarray, np.ndarray]: A tuple containing the frequency array (w) and the corresponding effective phase velocity array (cpE).
     """
-
     Pr = initialize_params(params)
     Pr.trace = 'no'
     Pr.cg = 'no'
@@ -158,6 +157,10 @@ def generate_samples(m: int, n: int, cs_min: float, cs_max: float, h_min: float,
     Returns:
     - np.ndarray: Generated samples, where each row represents a sample with [cs1, cs2, ..., h1, h2, ...] format.
     """
+    # h_fixed = -1. means variable thickness for each layer
+    #         = 1.  means fixed thickness 1. for all layers
+    #         = 0.  means variable thickness but same for all layers
+    # max_scale_factor = 3. means maximum 300% relative difference for H or Cs
     samples = np.zeros((m, 2 * n + 1))
     for i in range(m):
         cs_values = np.random.uniform(cs_min, cs_max, n + 1)
@@ -186,7 +189,7 @@ def generate_samples(m: int, n: int, cs_min: float, cs_max: float, h_min: float,
     return samples
 
 
-def process_params(params):
+def process_params(params: np.ndarray) -> np.ndarray:
     # w, cp = ForwardHS_First(params)
     w, cp = ForwardHS_Eff(params)
     return cp
@@ -204,7 +207,6 @@ def parallel_process_samples(samples: np.ndarray, w: np.ndarray, num_proc: int =
     Returns:
     - np.ndarray: Processed values for each sample.
     """
-
     p = cpu_count(logical=True)  # num logical processes
     p = len(samples) if 0 < len(samples) < p else p
     p = num_proc if 0 < num_proc < p else p
@@ -252,28 +254,22 @@ def multi_train_network(
     Returns:
     - None
     """
-
-    os.environ["CUDA_VISIBLE_DEVICES"] = str(int(cuda_visible))
-    if tf_intra_op != 0:
-        os.environ["TF_NUM_INTRAOP_THREADS"] = str(int(tf_intra_op))
-    if tf_inter_op != 0:
-        os.environ["TF_NUM_INTEROP_THREADS"] = str(int(tf_inter_op))
-
-    base_out_dir = base_out_dir + '/' if base_out_dir and not base_out_dir.endswith('/') else base_out_dir
-    if base_out_dir and not os.path.exists(base_out_dir):
-        os.makedirs(base_out_dir)
+    from mpi4py import MPI
+    comm = MPI.COMM_WORLD
+    rank = comm.Get_rank()
+    size = comm.Get_size()
     if not all(isinstance(value, list) for value in PrOpt.values()):
-        print("All values in PrOpt should be lists.")
+        print("All values in PrOpt should be lists.") if rank == 0 else None
         return
     if not all(key in ParametersNN for key in PrOpt):
-        print("All keys in PrOpt should exist in ParametersNN.")
+        print("All keys in PrOpt should exist in ParametersNN.") if rank == 0 else None
         return
     for PrOptRemove in PrOptRemoveList:
         if len(PrOptRemove) > 0 and not all(isinstance(value, list) for value in PrOptRemove.values()):
-            print("All values in PrOptRemove should be lists.")
+            print("All values in PrOptRemove should be lists.") if rank == 0 else None
             return
         if len(PrOptRemove) > 0 and not all(key in ParametersNN for key in PrOptRemove):
-            print("All keys in PrOptRemove should exist in ParametersNN.")
+            print("All keys in PrOptRemove should exist in ParametersNN.") if rank == 0 else None
             return
     combinations = list(itertools.product(*[PrOpt[key] for key in PrOpt]))
 
@@ -295,139 +291,224 @@ def multi_train_network(
     final_objects = [obj for obj in final_objects if not should_remove(obj, PrOptRemoveList)]
 
     if len(final_objects) == 0:
-        print("List of cases to try in PrOpt after removing PrOptRemove cases is empty.")
+        print("List of cases to try in PrOpt after removing PrOptRemove cases is empty.") if rank == 0 else None
         return
 
+    base_out_dir = base_out_dir + '/' if base_out_dir and not base_out_dir.endswith('/') else base_out_dir
+    sum_dir = f'{base_out_dir}summary/'
     for i, obj in enumerate(final_objects):
         obj['out_dir'] = f'{base_out_dir}out_{i}'
         obj['expr_id'] = i
-
-    sum_dir = f'{base_out_dir}summary/'
-    if sum_dir and not os.path.exists(sum_dir):
-        os.makedirs(sum_dir)
-
-    with open(f'{sum_dir}param_list.txt', 'w') as f:
-        f.write(f"Common params -----------------------------------\n\n")
-        for key, value in PrOpt.items():
-            if len(value) == 1:
-                f.write(f"{key}: {value[0]}\n")
-        f.write(f"\nExperiment params -------------------------------\n")
-        for idx, obj in enumerate(final_objects):
-            f.write(f"\n[Experiment {idx}] ----------------------------------\n")
-            for key, value in obj.items():
-                if key in PrOpt and len(PrOpt[key]) > 1:
-                    f.write(f"{key}: {value}\n")
-
-    p = cpu_count(logical=False)  # num physical processes
-    p = len(final_objects) if 0 < len(final_objects) < p else p
+    parts = np.linspace(0, len(final_objects), size + 1, dtype=int)
+    parts = np.diff(parts)
+    p_m = cpu_count(logical=False)  # num physical processes
+    p = p_m
+    p = parts[rank] if 0 < parts[rank] < p else p
     p = num_proc if 0 < num_proc < p else p
+    # num_proc = 1 if num_proc == 0 and size == 1 else num_proc
+    if cuda_visible < 0:
+        os.environ["CUDA_VISIBLE_DEVICES"] = str(int(cuda_visible))
+        if tf_intra_op != 0:
+            os.environ["TF_NUM_INTRAOP_THREADS"] = str(int(tf_intra_op))
+        else:
+            if p_m < p:
+                print(f"cpu_count < p on rank {rank}.")
+                return
+            os.environ["TF_NUM_INTRAOP_THREADS"] = str(int(p_m / p))
+        if tf_inter_op != 0:
+            os.environ["TF_NUM_INTEROP_THREADS"] = str(int(tf_inter_op))
+    else:
+        os.environ["CUDA_VISIBLE_DEVICES"] = str(int(rank))
+    final_obj_list = []
+    start_idx = 0
+    for size_p in parts:
+        end_idx = start_idx + size_p
+        final_obj_list.append(final_objects[start_idx:end_idx])
+        start_idx = end_idx
+
+    if rank == 0:
+        if sum_dir and not os.path.exists(sum_dir):
+            os.makedirs(sum_dir)
+        if base_out_dir and not os.path.exists(base_out_dir):
+            os.makedirs(base_out_dir)
+        with open(f'{sum_dir}param_list.txt', 'w') as f:
+            f.write(f"Common params -----------------------------------\n\n")
+            for key, value in PrOpt.items():
+                if len(value) == 1:
+                    f.write(f"{key}: {value[0]}\n")
+            f.write(f"\nExperiment params -------------------------------\n")
+            for idx, obj in enumerate(final_objects):
+                f.write(f"\n[Experiment {idx}] ----------------------------------\n")
+                for key, value in obj.items():
+                    if key in PrOpt and len(PrOpt[key]) > 1:
+                        f.write(f"{key}: {value}\n")
+
+    comm.Barrier()
+
     t = time()
     with Pool(processes=p) as pool:
         # result: [cp_error, param_error, train_valid_test_loss]
-        results = pool.map(forward_train_network, final_objects)
-    print('Multi training time: {:.3f} s'.format(time() - t))
+        results_rank = pool.map(forward_train_network, final_obj_list[rank])
+        with open(f"{base_out_dir}results_{rank}.pkl", "wb") as f:
+            pickle.dump(results_rank, f)
 
-    with open(f'{sum_dir}param_list.txt', 'a') as f:
-        f.write(f"\nParams and Times -------------------------------\n")
-        for idx, obj in enumerate(final_objects):
-            f.write(f"\nExperiment params -------------------------------\n")
-            model_fit_output_file = os.path.join(obj['out_dir'], 'model_fit_output.txt')
-            if os.path.exists(model_fit_output_file):
-                with open(model_fit_output_file, 'r', encoding='utf-8') as f_in:
-                    for line in f_in:
-                        if line.startswith('Training time:'):
-                            f.write(line)
-            for key, value in obj.items():
-                if key in PrOpt and len(PrOpt[key]) > 1:
-                    f.write(f"{key}: {value}\n")
+    comm.Barrier()
 
-    train_loss = np.zeros(len(final_objects))
-    valid_loss = np.zeros(len(final_objects))
-    test_loss = np.zeros(len(final_objects))
+    if rank == 0:
+        print('Multi training time: {:.3f} s'.format(time() - t))
+        results = []
+        for i in range(size):
+            with open(f"{base_out_dir}results_{i}.pkl", "rb") as f:
+                results_rank = pickle.load(f)
+                results.extend(results_rank)
+        with open(f'{sum_dir}param_list.txt', 'a') as f:
+            f.write(f"\nParams and Times -------------------------------\n")
+            for idx, obj in enumerate(final_objects):
+                f.write(f"\nExperiment params -------------------------------\n")
+                model_fit_output_file = os.path.join(obj['out_dir'], 'model_fit_output.txt')
+                if os.path.exists(model_fit_output_file):
+                    with open(model_fit_output_file, 'r', encoding='utf-8') as f_in:
+                        for line in f_in:
+                            if line.startswith('Training time:'):
+                                f.write(line)
+                for key, value in obj.items():
+                    if key in PrOpt and len(PrOpt[key]) > 1:
+                        f.write(f"{key}: {value}\n")
 
-    n_benchmarks = 0
-    for i in range(len(final_objects)):
-        if np.size(results[i][2]) > 0:
-            train_loss[i] = results[i][2][0]
-        if np.size(results[i][2]) > 0:
-            valid_loss[i] = results[i][2][1]
-        if np.size(results[i][2]) > 0:
-            test_loss[i] = results[i][2][2]
-        n_benchmarks = max(n_benchmarks, len(results[i][0])) if np.size(results[i][0]) > 0 else n_benchmarks
+        train_loss = np.zeros(len(final_objects))
+        valid_loss = np.zeros(len(final_objects))
+        test_loss = np.zeros(len(final_objects))
 
-    cp_error = np.zeros((n_benchmarks, len(final_objects)))
-    param_error = np.zeros((n_benchmarks, len(final_objects)))
+        n_benchmarks = 0
+        for i in range(len(final_objects)):
+            if np.size(results[i][2]) > 0:
+                train_loss[i] = results[i][2][0]
+            if np.size(results[i][2]) > 0:
+                valid_loss[i] = results[i][2][1]
+            if np.size(results[i][2]) > 0:
+                test_loss[i] = results[i][2][2]
+            n_benchmarks = max(n_benchmarks, len(results[i][0])) if np.size(results[i][0]) > 0 else n_benchmarks
 
-    for i in range(len(final_objects)):
-        if np.size(results[i][0]) > 0:
-            cp_error[:, i] = results[i][0]
-        if np.size(results[i][1]) > 0:
-            param_error[:, i] = results[i][1]
+        cp_error = np.zeros((n_benchmarks, len(final_objects)))
+        param_error = np.zeros((n_benchmarks, len(final_objects)))
 
-    overall_cp_error = np.sum(cp_error, axis=0)
-    overall_param_error = np.sum(param_error, axis=0)
+        for i in range(len(final_objects)):
+            if np.size(results[i][0]) > 0:
+                cp_error[:, i] = results[i][0]
+            if np.size(results[i][1]) > 0:
+                param_error[:, i] = results[i][1]
 
-    overall_loss = train_loss + valid_loss + test_loss
+        overall_cp_error = np.sum(cp_error, axis=0)
+        overall_param_error = np.sum(param_error, axis=0)
 
-    np.savetxt(f'{sum_dir}train_loss', train_loss)
-    np.savetxt(f'{sum_dir}valid_loss', valid_loss)
-    np.savetxt(f'{sum_dir}test_loss', test_loss)
-    np.savetxt(f'{sum_dir}cp_error', cp_error)
-    np.savetxt(f'{sum_dir}param_error', param_error)
+        overall_loss = train_loss + valid_loss + test_loss
 
-    plt.clf()
-    plt.plot(train_loss, label='Training Loss')
-    plt.plot(valid_loss, label='Validation Loss')
-    plt.plot(test_loss, label='Test Loss')
-    plt.xlabel('Experiment')
-    plt.ylabel('Loss')
-    plt.title(f'train_min:{np.argmin(train_loss)}, valid_min:{np.argmin(valid_loss)}, '
-              f'test_min:{np.argmin(test_loss)}, overall_min:{np.argmin(overall_loss)}')
-    plt.legend()
-    plt.savefig(f'{sum_dir}train_valid_loss.png')
-    with open(f'{sum_dir}train_valid_loss.pkl', 'wb') as f:
-        pickle.dump(plt.gcf(), f)
-    if final_objects[0]['show_plots']:
-        plt.show()
+        np.savetxt(f'{sum_dir}train_loss', train_loss)
+        np.savetxt(f'{sum_dir}valid_loss', valid_loss)
+        np.savetxt(f'{sum_dir}test_loss', test_loss)
+        np.savetxt(f'{sum_dir}cp_error', cp_error)
+        np.savetxt(f'{sum_dir}param_error', param_error)
 
-    plt.clf()
-    for i in range(n_benchmarks):
-        plt.plot(cp_error[i, :], label=f'cp_error_{i}')
-    plt.xlabel('Experiment')
-    plt.ylabel('cp_error')
-    min_indices = [np.argmin(row) for row in cp_error]
-    min_indices_str = ', '.join(map(str, min_indices))
-    plt.title('min cp_error: ' + min_indices_str + f' overall: {np.argmin(overall_cp_error)}')
-    plt.legend()
-    plt.savefig(f'{sum_dir}cp_error.png')
-    with open(f'{sum_dir}cp_error.pkl', 'wb') as f:
-        pickle.dump(plt.gcf(), f)
-    if final_objects[0]['show_plots']:
-        plt.show()
+        plt.clf()
+        plt.plot(train_loss, label='Training Loss')
+        plt.plot(valid_loss, label='Validation Loss')
+        plt.plot(test_loss, label='Test Loss')
+        plt.xlabel('Experiment')
+        plt.ylabel('Loss')
+        plt.title(f'train_min:{np.argmin(train_loss)}, valid_min:{np.argmin(valid_loss)}, '
+                  f'test_min:{np.argmin(test_loss)}, overall_min:{np.argmin(overall_loss)}')
+        plt.legend()
+        plt.savefig(f'{sum_dir}train_valid_loss.png')
+        with open(f'{sum_dir}train_valid_loss.pkl', 'wb') as f:
+            pickle.dump(plt.gcf(), f)
+        plt.show() if final_objects[0]['show_plots'] else None
 
-    plt.clf()
-    for i in range(n_benchmarks):
-        plt.plot(param_error[i, :], label=f'param_error_{i}')
-    plt.xlabel('Experiment')
-    plt.ylabel('param_error')
-    min_indices = [np.argmin(row) for row in param_error]
-    min_indices_str = ', '.join(map(str, min_indices))
-    plt.title('min param_error: ' + min_indices_str + f' overall: {np.argmin(overall_param_error)}')
-    plt.legend()
-    plt.savefig(f'{sum_dir}param_error.png')
-    with open(f'{sum_dir}param_error.pkl', 'wb') as f:
-        pickle.dump(plt.gcf(), f)
-    if final_objects[0]['show_plots']:
-        plt.show()
+        plt.clf()
+        for i in range(n_benchmarks):
+            plt.plot(cp_error[i, :], label=f'cp_error_{i}')
+        plt.xlabel('Experiment')
+        plt.ylabel('cp_error')
+        min_indices = [np.argmin(row) for row in cp_error]
+        min_indices_str = ', '.join(map(str, min_indices))
+        plt.title('min cp_error: ' + min_indices_str + f' overall: {np.argmin(overall_cp_error)}')
+        plt.legend()
+        plt.savefig(f'{sum_dir}cp_error.png')
+        with open(f'{sum_dir}cp_error.pkl', 'wb') as f:
+            pickle.dump(plt.gcf(), f)
+        plt.show() if final_objects[0]['show_plots'] else None
+
+        plt.clf()
+        for i in range(n_benchmarks):
+            plt.plot(param_error[i, :], label=f'param_error_{i}')
+        plt.xlabel('Experiment')
+        plt.ylabel('param_error')
+        min_indices = [np.argmin(row) for row in param_error]
+        min_indices_str = ', '.join(map(str, min_indices))
+        plt.title('min param_error: ' + min_indices_str + f' overall: {np.argmin(overall_param_error)}')
+        plt.legend()
+        plt.savefig(f'{sum_dir}param_error.png')
+        with open(f'{sum_dir}param_error.pkl', 'wb') as f:
+            pickle.dump(plt.gcf(), f)
+        plt.show() if final_objects[0]['show_plots'] else None
+
+    comm.Barrier()
+
+    os.remove(f"{base_out_dir}results_{rank}.pkl")
+
+    comm.Barrier()
+
+    if tf_intra_op != 0:
+        num_proc_grad = int(tf_intra_op)
+    else:
+        if p_m < p:
+            print(f"cpu_count < p on rank {rank}.")
+            return
+        num_proc_grad = int(p_m / p)
+
+    t = time()
+    with Pool(processes=p) as pool:
+        pool.map(partial(forward_add_optimization, num_proc_grad=num_proc_grad), final_obj_list[rank])
+
+    comm.Barrier()
+
+    if rank == 0 and len(final_obj_list) > 0 and final_obj_list[0][0]['optimization'] is True:
+        print('Multi optimization time: {:.3f} s'.format(time() - t))
+
+    comm.Barrier()
 
 
-def forward_train_network(PrNN):
+def forward_train_network(PrNN: dict) -> List[np.ndarray]:
     try:
         return train_network(PrNN)
     except Exception as e:
-        # print('Error in train_network: ' + str(e) + '\n' + traceback.format_exc())
-        print('Error in train_network: ' + str(e))
+        # print('Error in train_network(): ' + str(e) + '\n' + traceback.format_exc())
+        print('Error in train_network(): ' + str(e))
         return [np.array([]), ] * 3
+
+
+def forward_add_optimization(PrNN: dict, num_proc_grad: int) -> None:
+    """
+    Adds optimization to a neural network based on specified parameters.
+
+    Parameters:
+    - PrNN (dict): Dictionary containing neural network parameters.
+    - num_proc_grad (int): Number of processes for gradient computation.
+
+    Returns:
+    None
+    """
+    try:
+        if PrNN['optimization']:
+            PrOpt = ParametersOpt
+            PrOpt['h_fixed'] = PrNN['h_fixed']
+            # forward_func = ForwardHS_First
+            forward_func = ForwardHS_Eff
+            add_optimization(PrOpt, forward_func=forward_func, search_dir=PrNN['out_dir'], output_dir='',
+                             num_proc=1, num_proc_grad=num_proc_grad)  # num_proc=1: only one output dir
+    except Exception as e:
+        # print('Error in add_optimization(): ' + str(e) + '\n' + traceback.format_exc())
+        print('Error in add_optimization(): ' + str(e))
+        return
 
 
 def train_network(PrNN: dict) -> List[np.ndarray]:
@@ -440,10 +521,9 @@ def train_network(PrNN: dict) -> List[np.ndarray]:
     Returns:
     - List[np.ndarray]: A list containing computed errors and loss values.
     """
-
     if PrNN['training'] is False and PrNN['save_model'] is False:
         print('Error: training and save_model cannot be both False.')
-        return
+        return [np.array([]), ] * 3
     PrNN['in_dir'] = PrNN['in_dir'] + '/' if PrNN['in_dir'] and not PrNN['in_dir'].endswith('/') else PrNN['in_dir']
     PrNN['out_dir'] = PrNN['out_dir'] + '/' if PrNN['out_dir'] and not PrNN['out_dir'].endswith('/') else PrNN[
         'out_dir']
@@ -465,7 +545,7 @@ def train_network(PrNN: dict) -> List[np.ndarray]:
                 np.array([300., 200., 400., 500., 6., 4., 8.]),
                 np.array([300., 400., 200., 500., 6., 4., 8.])]
 
-    cp_vals = []
+    cp_vals, w = [], np.empty([])
     for i in range(len(par_vals)):
         w, cp = ForwardHS_Eff(par_vals[i])
         cp_vals.append(cp)
@@ -499,8 +579,8 @@ def train_network(PrNN: dict) -> List[np.ndarray]:
             cumulative_thickness = np.cumsum(thicknesses)
             cumulative_thickness = np.insert(cumulative_thickness, 0, 0.)
             plt.step(velocities, -1 * cumulative_thickness, where='post', label=labels[idx])
-        plt.xlabel('Velocity')
-        plt.ylabel('Depth')
+        plt.xlabel('Velocity (m/s)')
+        plt.ylabel('Depth (m)')
         plt.title(f'Velocity Profile_{str(velocities.astype(int))}_{str(thicknesses.astype(int))}')
         plt.legend()
         plt.grid(True)
@@ -509,24 +589,28 @@ def train_network(PrNN: dict) -> List[np.ndarray]:
         plt.savefig(f"{PrNN['out_dir']}prediction_profile_{i}.png")
         with open(f"{PrNN['out_dir']}prediction_profile_{i}.pkl", 'wb') as f:
             pickle.dump(plt.gcf(), f)
-        if PrNN['show_plots']:
-            plt.show()
+        plt.show() if PrNN['show_plots'] else None
 
+    cp_per_vals = []
     cp_error = np.zeros(len(par_vals))
     for i in range(len(par_vals)):
         w, cp_per = ForwardHS_Eff(par_vals_per[i, :])
+        cp_per_vals.append(cp_per)
         plt.clf()
         cp_error[i] = np.mean(np.square(np.abs(cp_per - cp_vals[i]) / cp_vals[i]))
         plt.plot(w, cp_vals[i], marker='o', label='Ground truth')
         plt.plot(w, cp_per, marker='o', label='Prediction')
-        plt.xlabel('Frequency')
-        plt.ylabel('Phase Velocity')
+        plt.xlabel('Frequency (Hz)')
+        plt.ylabel('Phase Velocity (m/s)')
         plt.legend()
         plt.savefig(f"{PrNN['out_dir']}prediction_cp_{i}.png")
         with open(f"{PrNN['out_dir']}prediction_cp_{i}.pkl", 'wb') as f:
             pickle.dump(plt.gcf(), f)
-        if PrNN['show_plots']:
-            plt.show()
+        plt.show() if PrNN['show_plots'] else None
+
+    cp_per_vals = np.array(cp_per_vals)
+    with open(f"{PrNN['out_dir']}prediction_benchmarks.pkl", "wb") as f:
+        pickle.dump((w, par_vals, cp_vals, cp_per_vals, par_vals_per), f)
 
     return [cp_error, param_error, train_valid_test_loss]
 
@@ -542,7 +626,6 @@ def add_noise_to_cp_values(directories: List[str], noise_percentage: float) -> N
     Returns:
     - None
     """
-
     for directory in directories:
         # Check if the directory exists
         if not os.path.isdir(directory):
@@ -570,7 +653,7 @@ def add_noise_to_cp_values(directories: List[str], noise_percentage: float) -> N
         print(f"Noise added to cp_values file in '{directory}' and saved as cp_values_noise.")
 
 
-def generate_training(num_layer: int, num_sample: int, cs_range: Tuple[float, float], h_range: Tuple[float, float],
+def generate_training(num_layer: int, num_sample: int, cs_range: List[float], h_range: List[float],
                       h_fixed: float = -1., max_scale_factor: float = 3., show_plots: bool = True,
                       out_dir: str = '', num_proc: int = 1) -> None:
     """
@@ -579,9 +662,12 @@ def generate_training(num_layer: int, num_sample: int, cs_range: Tuple[float, fl
     Parameters:
     - num_layer (int): Number of layers.
     - num_sample (int): Number of samples to generate.
-    - cs_range (Tuple[float, float]): Range of shear wave velocities for layers.
-    - h_range (Tuple[float, float]): Range of thicknesses for layers.
+    - cs_range (List[float]): Range of shear wave velocities for layers.
+    - h_range (List[float]): Range of thicknesses for layers.
     - h_fixed (float, optional): Fixed thickness value if applicable (default is -1.).
+               -1. means variable thickness for each layer
+              = 1. means fixed thickness 1. for all layers
+              = 0. means variable thickness but same for all layers
     - max_scale_factor (float, optional): Maximum scale factor for velocity/thickness differences (default is 3.).
     - show_plots (bool, optional): Whether to display plots (default is True).
     - out_dir (str, optional): Output directory to save generated samples and cp_values files (default is '').
@@ -590,7 +676,6 @@ def generate_training(num_layer: int, num_sample: int, cs_range: Tuple[float, fl
     Returns:
     - None
     """
-
     # input ------------------------------
     m = num_sample
     n = int(num_layer)  # num_layer
@@ -622,7 +707,7 @@ def generate_training(num_layer: int, num_sample: int, cs_range: Tuple[float, fl
             samples = samples[~invalid_rows]
         np.savetxt(f'{out_dir}samples', samples)
         np.savetxt(f'{out_dir}cp_values', cp_values)
-        print(f'cp_size: {str(cp_values.shape)} - param_size: {str(samples.shape)}')
+        print(f'Layer {num_layer} | cp_size: {str(cp_values.shape)} - param_size: {str(samples.shape)}')
     else:
         samples = np.loadtxt(f'{out_dir}samples')
         cp_values = np.loadtxt(f'{out_dir}cp_values')
@@ -645,8 +730,8 @@ def generate_training(num_layer: int, num_sample: int, cs_range: Tuple[float, fl
             cumulative_thickness = np.cumsum(thicknesses)
             cumulative_thickness = np.insert(cumulative_thickness, 0, 0.)
             plt.step(velocities, -1 * cumulative_thickness, where='post')
-        plt.xlabel('Velocity')
-        plt.ylabel('Depth')
+        plt.xlabel('Velocity (m/s)')
+        plt.ylabel('Depth (m)')
         plt.title('Velocity Profile')
         plt.grid(True)
         plt.xlim(cs_min * 0.9, cs_max * 1.1)
@@ -665,19 +750,22 @@ def generate_training(num_layer: int, num_sample: int, cs_range: Tuple[float, fl
         plt.clf()
 
 
-def generate_training_multi_layer_mpi(n: int, num_sample: int, cs_range: List[float],
-                                      h_range: List[float], h_fixed: float = -1.,
-                                      max_scale_factor: float = 3., show_plots: bool = False,
-                                      out_dir: str = '', num_proc: int = 1) -> None:
+def generate_training_multi_layer(n: List[int], num_sample: List[int], cs_range: List[float],
+                                  h_range: List[float], h_fixed: float = -1.,
+                                  max_scale_factor: float = 3., show_plots: bool = False,
+                                  out_dir: str = '', num_proc: int = 1) -> None:
     """
     Generate training samples and corresponding effective phase velocity values for multiple layers using MPI.
 
     Parameters:
-    - n (int): Number of layers.
-    - num_sample (int): Total number of samples to generate.
+    - n (List[int]): Number of layers.
+    - num_sample (List[int]): Total number of samples to generate for each layer.
     - cs_range (Tuple[float, float]): Range of shear wave velocities for layers.
     - h_range (Tuple[float, float]): Range of thicknesses for layers.
     - h_fixed (float, optional): Fixed thickness value if applicable (default is -1.).
+               -1. means variable thickness for each layer
+              = 1. means fixed thickness 1. for all layers
+              = 0. means variable thickness but same for all layers
     - max_scale_factor (float, optional): Maximum scale factor for velocity/thickness differences (default is 3.).
     - show_plots (bool, optional): Whether to display plots (default is False).
     - out_dir (str, optional): Output directory to save generated samples and cp_values files (default is '').
@@ -686,90 +774,82 @@ def generate_training_multi_layer_mpi(n: int, num_sample: int, cs_range: List[fl
     Returns:
     - None
     """
-
     from mpi4py import MPI
     comm = MPI.COMM_WORLD
     rank = comm.Get_rank()
     size = comm.Get_size()
-    parts = np.linspace(0, num_sample, size + 1, dtype=int)
-    parts = np.diff(parts)
+
+    if len(num_sample) != len(n):
+        print("n/num_sample in generate_training_multi_layer() has wrong size.") if rank == 0 else None
+        return
     out_dir = out_dir + '/' if out_dir and not out_dir.endswith('/') else out_dir
-    t = time()
     if rank == 0:
         if out_dir and not os.path.exists(out_dir):
             os.makedirs(out_dir)
-    comm.Barrier()
-    generate_training_multi_layer(n_min=n, n_max=n, num_sample=parts[rank], cs_range=cs_range, h_range=h_range,
-                                  h_fixed=h_fixed, max_scale_factor=max_scale_factor, show_plots=show_plots,
-                                  out_dir=f'{out_dir}{rank}', num_proc=num_proc)
-    comm.Barrier()
-    if rank == 0:
-        aggregated_cp_values = []
-        aggregated_samples = []
-        for i in range(0, size):
-            cp_values = np.loadtxt(f'{out_dir}{i}/cp_values')
-            samples = np.loadtxt(f'{out_dir}{i}/samples')
-            aggregated_cp_values.append(cp_values)
-            aggregated_samples.append(samples)
-            print(f'>>> Portion {i}, cp_size: {cp_values.shape}, param_size: {samples.shape}')
+        for n_i in n:
+            layer_out_dir = f'{out_dir}{n_i}/'
+            if layer_out_dir and not os.path.exists(layer_out_dir):
+                os.makedirs(layer_out_dir)
 
-        aggregated_cp_values = np.vstack(aggregated_cp_values)
-        aggregated_samples = np.vstack(aggregated_samples)
-        print(f'>>> Final, cp_size: {aggregated_cp_values.shape}, param_size: {aggregated_samples.shape}')
-        indices = np.random.permutation(aggregated_samples.shape[0])
-        aggregated_cp_values = aggregated_cp_values[indices]
-        aggregated_samples = aggregated_samples[indices]
+    comm.barrier()
 
-        np.savetxt(f'{out_dir}cp_values', aggregated_cp_values)
-        np.savetxt(f'{out_dir}samples', aggregated_samples)
-        print(f'>>> MPI Time {n} layer:', time() - t)
-        for i in range(0, size):
-            if os.path.exists(f'{out_dir}{i}') and os.path.isdir(f'{out_dir}{i}'):
-                shutil.rmtree(f'{out_dir}{i}')
-
-    comm.Barrier()
-
-
-def generate_training_multi_layer(n_min: int, n_max: int, num_sample: int, cs_range: List[float],
-                                  h_range: List[float], h_fixed: float = -1., max_scale_factor: float = 3.,
-                                  show_plots: bool = False, out_dir: str = '', num_proc: int = 1) -> None:
-    """
-    Generate training samples and corresponding effective phase velocity values for multiple layers.
-
-    Parameters:
-    - n_min (int): Minimum number of layers.
-    - n_max (int): Maximum number of layers.
-    - num_sample (int): Total number of samples to generate for each number of layers.
-    - cs_range (Tuple[float, float]): Range of shear wave velocities for layers.
-    - h_range (Tuple[float, float]): Range of thicknesses for layers.
-    - h_fixed (float, optional): Fixed thickness value if applicable (default is -1.).
-    - max_scale_factor (float, optional): Maximum scale factor for velocity/thickness differences (default is 3.).
-    - show_plots (bool, optional): Whether to display plots (default is False).
-    - out_dir (str, optional): Output directory to save generated samples and cp_values files (default is '').
-    - num_proc (int, optional): Number of processes for parallel processing (default is 1).
-
-    Returns:
-    - None
-    """
-
-    if n_min > n_max:
-        print('n_min > n_max')
-        return
-    out_dir = out_dir + '/' if out_dir and not out_dir.endswith('/') else out_dir
-    if out_dir and not os.path.exists(out_dir):
-        os.makedirs(out_dir)
-    n_layers = np.arange(int(n_min), int(n_max) + 1, dtype=int)
-    for n in n_layers:
-        if n_max > n_min:
-            out_dir_n = out_dir + f'{n}/'
-            if out_dir_n and not os.path.exists(out_dir_n):
-                os.makedirs(out_dir_n)
-        else:
-            out_dir_n = out_dir
-        print(f'Started {n} layer...')
+    for ind, n_i in enumerate(n):
+        if num_sample[ind] < size:
+            continue
+        parts = np.linspace(0, num_sample[ind], size + 1, dtype=int)
+        parts = np.diff(parts)
+        layer_out_dir = f'{out_dir}{n_i}/'
+        rank_out_dir = f'{layer_out_dir}{rank}/'
+        if rank_out_dir and not os.path.exists(rank_out_dir):
+            os.makedirs(rank_out_dir)
         t = time()
-        generate_training(n, num_sample, cs_range, h_range, h_fixed, max_scale_factor, show_plots, out_dir_n, num_proc)
-        print(f'Time {n} layer:', time() - t)
+        generate_training(num_layer=n_i, num_sample=int(parts[rank]), cs_range=cs_range, h_range=h_range,
+                          h_fixed=h_fixed, max_scale_factor=max_scale_factor, show_plots=show_plots,
+                          out_dir=rank_out_dir, num_proc=num_proc)
+
+        comm.Barrier()
+
+        if rank == 0:
+            aggregated_cp_values = []
+            aggregated_samples = []
+            for i in range(0, size):
+                rank_out_dir_i = f'{layer_out_dir}{i}/'
+                cp_values = np.loadtxt(f'{rank_out_dir_i}cp_values')
+                samples = np.loadtxt(f'{rank_out_dir_i}samples')
+                aggregated_cp_values.append(cp_values)
+                aggregated_samples.append(samples)
+                print(f'>>> Layer {n_i} | Portion {i}, cp_size: {cp_values.shape}, param_size: {samples.shape}')
+            aggregated_cp_values = np.vstack(aggregated_cp_values)
+            aggregated_samples = np.vstack(aggregated_samples)
+            print(f'>>> Layer {n_i} | Final, cp_size: {aggregated_cp_values.shape}, '
+                  f'param_size: {aggregated_samples.shape}')
+            indices = np.random.permutation(aggregated_samples.shape[0])
+            aggregated_cp_values = aggregated_cp_values[indices]
+            aggregated_samples = aggregated_samples[indices]
+
+            np.savetxt(f'{layer_out_dir}cp_values', aggregated_cp_values)
+            np.savetxt(f'{layer_out_dir}samples', aggregated_samples)
+            print(f'>>> Layer {n_i} | Time:', time() - t)
+
+        comm.Barrier()
+
+        if os.path.exists(rank_out_dir) and os.path.isdir(rank_out_dir):
+            shutil.rmtree(rank_out_dir)
+
+        comm.Barrier()
+
+    layer_out_dir = f'{out_dir}{n[0]}/'
+    if rank == 0 and len(n) == 1 and os.path.exists(f'{layer_out_dir}cp_values') and os.path.exists(
+            f'{layer_out_dir}samples'):
+        os.remove(f'{out_dir}cp_values') if os.path.exists(f'{out_dir}cp_values') else None
+        os.remove(f'{out_dir}samples') if os.path.exists(f'{out_dir}samples') else None
+        sleep(1)
+        shutil.move(f'{layer_out_dir}cp_values', out_dir)
+        shutil.move(f'{layer_out_dir}samples', out_dir)
+        sleep(3)
+        shutil.rmtree(layer_out_dir)
+
+    comm.Barrier()
 
 
 def load_and_show_plots(directory: str) -> None:
@@ -797,3 +877,130 @@ def load_and_show_plots(directory: str) -> None:
         # Show the loaded plot
         plt.figure(loaded_plot.number)
         plt.show()
+
+
+def add_optimization_process_directory(directory: str, output_dir: str, PrOpt: dict, forward_func: callable,
+                                       num_proc_grad: int) -> None:
+    """
+    Adds optimization to a process directory based on specified parameters.
+
+    Parameters:
+    - directory (str): Directory containing data for optimization.
+    - output_dir (str): Output directory for saving optimization results.
+    - PrOpt (dict): Dictionary containing optimization parameters.
+    - forward_func (callable): Callable function for forward computation.
+    - num_proc_grad (int): Number of processes for gradient computation.
+
+    Returns:
+    None
+    """
+    file_name = 'prediction_benchmarks.pkl'
+    with open(os.path.join(directory, file_name), "rb") as f:
+        w, par_vals, cp_vals, cp_per_vals, par_vals_per = pickle.load(f)
+    cp_optimized_all, optimized_param_all = [], []
+    for i in range(len(par_vals)):
+        PrOpt['optim_id'] = i
+        if output_dir == '':
+            PrOpt['out_dir'], output_dir_i = directory, directory
+        else:
+            PrOpt['out_dir'] = output_dir_i = f"{output_dir}{os.path.basename(os.path.normpath(directory))}/"
+        par_vals_per_i = par_vals_per[i, :]
+        optimized_param = WaveDispOptim(PrOpt=PrOpt, forward_func=forward_func, cp_observed=cp_vals[i, :],
+                                        init_params=par_vals_per_i, n_proc=num_proc_grad)
+        _, cp_optimized = forward_func(optimized_param)
+        cp_optimized_all.append(cp_optimized)
+        optimized_param_all.append(optimized_param)
+        plt.clf()
+        plt.plot(w, cp_vals[i, :], label='Grand truth')
+        plt.plot(w, cp_optimized, label='Optimized', linestyle='dotted', linewidth=3)
+        plt.plot(w, cp_per_vals[i, :], label='Predicted')
+        plt.xlabel('Frequency (Hz)')
+        plt.ylabel('Phase Velocity (m/s)')
+        plt.box(True)
+        plt.legend()
+        plt.savefig(f"{output_dir_i}optim_cp_{i}.png")
+        with open(f"{output_dir_i}optim_cp_{i}.pkl", 'wb') as f:
+            pickle.dump(plt.gcf(), f)
+        plt.show() if PrOpt['show_plots'] else None
+
+        n = len(optimized_param)
+        if PrOpt['h_fixed'] == 0.:
+            optimized_param = np.pad(optimized_param, (0, n - 3), mode='constant', constant_values=optimized_param[-1])
+            par_vals_per_i = np.pad(par_vals_per_i, (0, n - 3), mode='constant', constant_values=par_vals_per_i[-1])
+        elif PrOpt['h_fixed'] == -1.:
+            ...  # no change needed
+        else:
+            optimized_param = np.pad(optimized_param, (0, n - 1), mode='constant', constant_values=PrOpt['h_fixed'])
+            par_vals_per_i = np.pad(par_vals_per_i, (0, n - 1), mode='constant', constant_values=PrOpt['h_fixed'])
+
+        plt.clf()
+        samples = [par_vals[i], optimized_param, par_vals_per_i]
+        labels = ['Ground truth', 'Optimized', 'Predicted']
+        style = [('-', 1), ('dotted', 3), ('-', 1)]
+        velocities, thicknesses = None, None
+        for idx, row in enumerate(samples):
+            nr = (len(row) - 1) // 2
+            velocities = np.array(row[:nr + 1])
+            velocities = np.insert(velocities, 0, velocities[0])
+            thicknesses = np.append(row[nr + 1:], 10)
+            cumulative_thickness = np.cumsum(thicknesses)
+            cumulative_thickness = np.insert(cumulative_thickness, 0, 0.)
+            plt.step(velocities, -1 * cumulative_thickness, where='post', label=labels[idx],
+                     linestyle=style[idx][0], linewidth=style[idx][1])
+        plt.xlabel('Velocity (m/s)')
+        plt.ylabel('Depth (m)')
+        plt.title(f'Velocity Profile_{str(velocities.astype(int))}_{str(thicknesses.astype(int))}')
+        plt.legend()
+        plt.grid(True)
+        # plt.xlim(100, 600)
+        # plt.ylim(0, np.max(samples[,:]))
+        plt.savefig(f"{output_dir_i}optim_profile_{i}.png")
+        with open(f"{output_dir_i}optim_profile_{i}.pkl", 'wb') as f:
+            pickle.dump(plt.gcf(), f)
+        plt.show() if PrOpt['show_plots'] else None
+    cp_optimized_all, optimized_param_all = np.array(cp_optimized_all), np.array(optimized_param_all)
+    with open(f"{directory}optim_prediction_benchmarks.pkl", 'wb') as f:
+        pickle.dump([w, par_vals, cp_vals, cp_per_vals, par_vals_per, cp_optimized_all, optimized_param_all], f)
+
+
+def add_optimization(PrOpt: dict, forward_func: callable, search_dir: str, output_dir: str = '',
+                     num_proc: int = 1, num_proc_grad: int = 1) -> None:
+    """
+    Adds optimization based on specified parameters.
+
+    Parameters:
+    - PrOpt (dict): Dictionary containing optimization parameters.
+    - forward_func (callable): Callable function for forward computation.
+    - search_dir (str): Directory to search for optimization data.
+    - output_dir (str, optional): Output directory for saving optimization results (default is '').
+    - num_proc (int, optional): Number of processes for optimization (default is 1).
+    - num_proc_grad (int, optional): Number of processes for gradient computation (default is 1).
+
+    Returns:
+    None
+
+    Notes:
+    - If output_dir is not specified or an empty string, it defaults to the same value as search_dir.
+    """
+    output_dir = output_dir + '/' if output_dir and not output_dir.endswith('/') else output_dir
+    if output_dir and not os.path.exists(output_dir):
+        os.makedirs(output_dir)
+    directories = []
+    file_name = 'prediction_benchmarks.pkl'
+    for root, dirs, files in os.walk(search_dir):
+        if file_name in files:
+            root = root.replace('\\', '/')
+            root += '/' if not root.endswith('/') else None
+            directories.append(root)
+    if num_proc == 1:
+        for directory in directories:
+            add_optimization_process_directory(directory=directory, output_dir=output_dir, PrOpt=PrOpt,
+                                               forward_func=forward_func, num_proc_grad=num_proc_grad)
+    else:
+        p = cpu_count(logical=False)  # num Physical processes
+        p = len(directories) if 0 < len(directories) < p else p
+        p = num_proc if 0 < num_proc < p else p
+        process_directory = partial(add_optimization_process_directory, output_dir=output_dir, PrOpt=PrOpt,
+                                    forward_func=forward_func, num_proc_grad=num_proc_grad)
+        with Pool(processes=p) as pool:
+            pool.map(process_directory, directories)

@@ -290,7 +290,6 @@ def history(PrNN: dict, model_history: Optional[dict] = None) -> None:
     Returns:
         None
     """
-
     if PrNN['save_model'] is True:
         model_history = json.load(open(f"{PrNN['out_dir']}trained_model.json", 'r'))
 
@@ -303,8 +302,7 @@ def history(PrNN: dict, model_history: Optional[dict] = None) -> None:
     plt.ylabel('Log10(Loss)')
     plt.legend()
     plt.savefig(f"{PrNN['out_dir']}training_history.png")
-    if PrNN['show_plots']:
-        plt.show()
+    plt.show() if PrNN['show_plots'] else None
 
 
 def prediction(PrNN: dict, input_array: np.ndarray, model: Optional[tf.keras.Model] = None,

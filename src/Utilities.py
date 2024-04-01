@@ -65,12 +65,36 @@ ParametersNN = {
     'save_period': 10000,
     'patience': 1000,
     'num_samples': 0,  # 0: all samples
-    'h_fixed': -1.,  # -1.: Cp/H, value: Cp with fixed H=value
+    'h_fixed': -1.,  # -1.: Cp and H  |  0: CP with flexible H for all  |  value: Cp with fixed H=value for all
     'verbose': 0,  # training 0,1,2
     'save_model': False,
     'shuffle_data': False,
     'show_plots': False,
     'training': True,
+    'optimization': False,
+}
+
+ParametersOpt = {
+    # Gradient-free: Nelder-Mead, Powell, COBYLA
+    # Needs Gradient: CG, BFGS, L-BFGS-B, TNC, SLSQP
+    # Needs Hessian: Newton-CG, dogleg, trust-ncg, trust-krylov, trust-exact, trust-constr
+    # No callback support (not compatible): COBYLA, TNC, SLSQP
+    'method': 'trust-constr',
+    'max_iter': 60,
+    'patience': 3,
+    'early_stop': 1.e-6,  # 0.: no early stop, otherwise stop if abs(misfit[i]-misfit[i-1])/misfit[i-1] < early_stop
+    'grad': 'FDM',  # 'FDM', 2-point, 3-point, cs
+    'hess': 'FDM',  # 'FDM', 2-point, 3-point, cs
+    'grad_eps': 1.e-2,  # relative to each parameter
+    # bounds are effective for [Nelder-Mead, L-BFGS-B, TNC, SLSQP, Powell, trust-constr, COBYLA]
+    'bounds': 0.1,  # 0. or 'constant_bounds'!=None: no variable bounds, otherwise: bound_range=param-/+bounds*param
+    'constant_bounds': ((100., 500.), (1., 10.)),  # None: no bounds, otherwise: constant bounds for Cp and H
+    'verbose': False,
+    'out_dir': '../out/out_optim',
+    'show_plots': False,
+    'save_plots': True,
+    'optim_id': 0,
+    'h_fixed': -1.,  # -1.: Cp and H  |  0: CP with flexible H for all  |  value: Cp with fixed H=value for all
 }
 
 

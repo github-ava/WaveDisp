@@ -5,7 +5,7 @@ from src.Utilities import Nmat, Bmat, CFEM_length, Parameters
 
 
 def WaveDisp(Pr: Parameters) -> tuple[
-    np.ndarray, np.ndarray, np.ndarray, list[np.ndarray], list[np.ndarray], list[list[float]]]:
+    np.ndarray, np.ndarray, np.ndarray, list[np.ndarray], list[np.ndarray], list[np.ndarray]]:
     """
     Compute wave dispersion for a given set of parameters.
 
@@ -140,8 +140,8 @@ def WaveDisp(Pr: Parameters) -> tuple[
             L = Lpmdl[k]
             detJ = L / 2
             for gpos in range(GP.shape[1]):
-                s = GP[0, gpos]
-                wt = GP[1, gpos]
+                s = float(GP[0, gpos])
+                wt = float(GP[1, gpos])
                 N, B = Nmat(s, 2), Bmat(s, 2) / detJ
                 N, B = np.kron(N, np.eye(2)), np.kron(B, np.eye(2))
                 Kzz[np.ix_(ndeE, ndeE)] += (N.T @ Dzz @ N) * (detJ * wt)
@@ -337,7 +337,7 @@ def WaveDisp(Pr: Parameters) -> tuple[
                 for j in range(cph.shape[1]):
                     cg_temp[j] = cg[cpl[j], j]
                 cgT.append(cg_temp)
-            kzT.append([kz[cpl[j], j] for j in range(len(cpl))])
+            kzT.append(np.array([kz[cpl[j], j] for j in range(len(cpl))]))
             for j in range(len(cpl)):
                 cph[cpl[j], j] = np.inf
         cpT = cpT[:min(nMode, len(cpT))]
