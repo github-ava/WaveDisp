@@ -58,7 +58,7 @@ mpiexec -n <num_ranks> python test/TestTraining.py
 
 ![Alt Text](image/prediction.jpg)
 
-## Classical optimization
+## Classical Optimization
 
 To use classical optimization (e.g., gradient-based methods), run this test:
 
@@ -68,7 +68,7 @@ python test/TestOptimization.py
 
 ![Alt Text](image/optimization.jpg)
 
-## Dispersion curves (theoretical/effective)
+## Dispersion Curves (theoretical/effective)
 
 To solve the forward problem and obtain/plot the dispersion curves, run the test below:
 
