@@ -7,7 +7,7 @@ os.chdir(os.path.dirname(__file__))
 from test.TestForward import test_forward
 from test.TestGeneration import test_generation
 from test.TestTraining import test_training
-from test.OtimizationTest import optimization_test, add_optimization_test, add_multi_optimization_test
+from test.TestOptimization import optimization_test, add_optimization_test, add_multi_optimization_test
 
 if __name__ == "__main__":
     # -----------------------------------

@@ -55,10 +55,10 @@ ParametersNN = {
     'loss': 2,  # 0: MSE, 1: MSLE, 2: MAE, 3: Huber
     'model': 0,  # 0: ANN , 0: CNN
     'optimizer': 1,  # 0: Adam, 1: Nadam
-    'initializer': 2,  # 0: he_normal, 1:glorot_normal, 2: random_normal
-    'activation': 3,  # 0: relu, 1: sigmoid, 2: LeakyReLU, 3: custom_leaky_relu
-    'batch_size': int(2 ** 7),
-    'learning_rate': 1.e-4,
+    'initializer': 1,  # 0: he_normal, 1:glorot_normal, 2: random_normal
+    'activation': 2,  # 0: relu, 1: sigmoid, 2: LeakyReLU, 3: custom_leaky_relu
+    'batch_size': int(2 ** 8),
+    'learning_rate': 1.e-3,
     'train_ratio': 0.80,
     'val_ratio': 0.15,
     'max_epochs': 800,
@@ -80,15 +80,15 @@ ParametersOpt = {
     # Needs Hessian: Newton-CG, dogleg, trust-ncg, trust-krylov, trust-exact, trust-constr
     # No callback support (not compatible): COBYLA, TNC, SLSQP
     'method': 'trust-constr',
-    'max_iter': 60,
-    'patience': 3,
-    'early_stop': 1.e-6,  # 0.: no early stop, otherwise stop if abs(misfit[i]-misfit[i-1])/misfit[i-1] < early_stop
+    'max_iter': 100,
+    'patience': 5,
+    'early_stop': 1.e-8,  # 0.: no early stop, otherwise stop if abs(misfit[i]-misfit[i-1])/misfit[i-1] < early_stop
     'grad': 'FDM',  # 'FDM', 2-point, 3-point, cs
     'hess': 'FDM',  # 'FDM', 2-point, 3-point, cs
     'grad_eps': 1.e-2,  # relative to each parameter
     # bounds are effective for [Nelder-Mead, L-BFGS-B, TNC, SLSQP, Powell, trust-constr, COBYLA]
     'bounds': 0.1,  # 0. or 'constant_bounds'!=None: no variable bounds, otherwise: bound_range=param-/+bounds*param
-    'constant_bounds': ((100., 500.), (1., 10.)),  # None: no bounds, otherwise: constant bounds for Cp and H
+    'constant_bounds': ((150., 550.), (1.5, 8.5)),  # None: no bounds, otherwise: constant bounds for Cp and H
     'verbose': False,
     'out_dir': '../out/out_optim',
     'show_plots': False,

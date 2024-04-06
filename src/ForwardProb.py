@@ -258,6 +258,9 @@ def multi_train_network(
     comm = MPI.COMM_WORLD
     rank = comm.Get_rank()
     size = comm.Get_size()
+    all_hostnames = comm.allgather(MPI.Get_processor_name())
+    all_hostnames_same = all(all_hostnames[0] == hostname for hostname in all_hostnames)
+
     if not all(isinstance(value, list) for value in PrOpt.values()):
         print("All values in PrOpt should be lists.") if rank == 0 else None
         return
@@ -311,10 +314,16 @@ def multi_train_network(
         if tf_intra_op != 0:
             os.environ["TF_NUM_INTRAOP_THREADS"] = str(int(tf_intra_op))
         else:
-            if p_m < p:
-                print(f"cpu_count < p on rank {rank}.")
-                return
-            os.environ["TF_NUM_INTRAOP_THREADS"] = str(int(p_m / p))
+            if all_hostnames_same is False:
+                if p_m < p:
+                    print(f"cpu_count < p on rank {rank}.")
+                    return
+                os.environ["TF_NUM_INTRAOP_THREADS"] = str(int(p_m / p))
+            else:
+                if (p_m / size) < p:
+                    print(f"cpu_count/size < p on rank {rank}.")
+                    return
+                os.environ["TF_NUM_INTRAOP_THREADS"] = str(int((p_m / size) / p))
         if tf_inter_op != 0:
             os.environ["TF_NUM_INTEROP_THREADS"] = str(int(tf_inter_op))
     else:
@@ -346,9 +355,17 @@ def multi_train_network(
     comm.Barrier()
 
     t = time()
-    with Pool(processes=p) as pool:
-        # result: [cp_error, param_error, train_valid_test_loss]
-        results_rank = pool.map(forward_train_network, final_obj_list[rank])
+    if cuda_visible < 0:
+        with Pool(processes=p) as pool:
+            # result: [cp_error, param_error, train_valid_test_loss]
+            results_rank = pool.map(forward_train_network, final_obj_list[rank])
+        with open(f"{base_out_dir}results_{rank}.pkl", "wb") as f:
+            pickle.dump(results_rank, f)
+    else:
+        results_rank = []
+        for obj_rank in final_obj_list[rank]:
+            result = forward_train_network(obj_rank)
+            results_rank.append(result)
         with open(f"{base_out_dir}results_{rank}.pkl", "wb") as f:
             pickle.dump(results_rank, f)
 
@@ -383,9 +400,7 @@ def multi_train_network(
         for i in range(len(final_objects)):
             if np.size(results[i][2]) > 0:
                 train_loss[i] = results[i][2][0]
-            if np.size(results[i][2]) > 0:
                 valid_loss[i] = results[i][2][1]
-            if np.size(results[i][2]) > 0:
                 test_loss[i] = results[i][2][2]
             n_benchmarks = max(n_benchmarks, len(results[i][0])) if np.size(results[i][0]) > 0 else n_benchmarks
 
@@ -460,10 +475,16 @@ def multi_train_network(
     if tf_intra_op != 0:
         num_proc_grad = int(tf_intra_op)
     else:
-        if p_m < p:
-            print(f"cpu_count < p on rank {rank}.")
-            return
-        num_proc_grad = int(p_m / p)
+        if all_hostnames_same is False:
+            if p_m < p:
+                print(f"cpu_count < p on rank {rank}.")
+                return
+            num_proc_grad = int(p_m / p)
+        else:
+            if (p_m / size) < p:
+                print(f"cpu_count/size < p on rank {rank}.")
+                return
+            num_proc_grad = int((p_m / size) / p)
 
     t = time()
     with Pool(processes=p) as pool:
@@ -570,7 +591,7 @@ def train_network(PrNN: dict) -> List[np.ndarray]:
         plt.clf()
         velocities, thicknesses = None, None
         if len(par_vals[i]) == len(par_vals_per[i]):  # heights may not be the same
-            param_error = np.mean(np.square(np.abs(par_vals[i] - par_vals_per[i]) / par_vals[i]))
+            param_error[i] = np.mean(np.square(np.abs(par_vals[i] - par_vals_per[i]) / par_vals[i]))
         for idx, row in enumerate(samples):
             nr = (len(row) - 1) // 2
             velocities = np.array(row[:nr + 1])
@@ -778,6 +799,16 @@ def generate_training_multi_layer(n: List[int], num_sample: List[int], cs_range:
     comm = MPI.COMM_WORLD
     rank = comm.Get_rank()
     size = comm.Get_size()
+    all_hostnames = comm.allgather(MPI.Get_processor_name())
+    all_hostnames_same = all(all_hostnames[0] == hostname for hostname in all_hostnames)
+
+    if num_proc == 0 and len(all_hostnames) > 1 and all_hostnames_same is True:
+        # to prevent over utilization if all MPI ranks are on the same machine
+        p = cpu_count(logical=True)  # num logical processes
+        num_proc = int(p / size)
+        if num_proc < 1:
+            print("Wrong configuration in generate_training_multi_layer(): p < size")
+            return
 
     if len(num_sample) != len(n):
         print("n/num_sample in generate_training_multi_layer() has wrong size.") if rank == 0 else None
@@ -904,9 +935,26 @@ def add_optimization_process_directory(directory: str, output_dir: str, PrOpt: d
             PrOpt['out_dir'], output_dir_i = directory, directory
         else:
             PrOpt['out_dir'] = output_dir_i = f"{output_dir}{os.path.basename(os.path.normpath(directory))}/"
-        par_vals_per_i = par_vals_per[i, :]
+
+        par_vals_per_i, ni = par_vals_per[i, :], len(par_vals_per[i, :])
+        if PrOpt['h_fixed'] == 0.:
+            par_vals_per_i_opt = par_vals_per_i[:-(ni // 2) + 1]
+        elif PrOpt['h_fixed'] == -1.:
+            par_vals_per_i_opt = par_vals_per_i  # no change needed
+        else:
+            par_vals_per_i_opt = par_vals_per_i[:-(ni // 2)]
+
         optimized_param = WaveDispOptim(PrOpt=PrOpt, forward_func=forward_func, cp_observed=cp_vals[i, :],
-                                        init_params=par_vals_per_i, n_proc=num_proc_grad)
+                                        init_params=par_vals_per_i_opt, n_proc=num_proc_grad)
+
+        n = len(optimized_param)
+        if PrOpt['h_fixed'] == 0.:
+            optimized_param = np.pad(optimized_param, (0, n - 3), mode='constant', constant_values=optimized_param[-1])
+        elif PrOpt['h_fixed'] == -1.:
+            ...  # no change needed
+        else:
+            optimized_param = np.pad(optimized_param, (0, n - 1), mode='constant', constant_values=PrOpt['h_fixed'])
+
         _, cp_optimized = forward_func(optimized_param)
         cp_optimized_all.append(cp_optimized)
         optimized_param_all.append(optimized_param)
@@ -922,16 +970,6 @@ def add_optimization_process_directory(directory: str, output_dir: str, PrOpt: d
         with open(f"{output_dir_i}optim_cp_{i}.pkl", 'wb') as f:
             pickle.dump(plt.gcf(), f)
         plt.show() if PrOpt['show_plots'] else None
-
-        n = len(optimized_param)
-        if PrOpt['h_fixed'] == 0.:
-            optimized_param = np.pad(optimized_param, (0, n - 3), mode='constant', constant_values=optimized_param[-1])
-            par_vals_per_i = np.pad(par_vals_per_i, (0, n - 3), mode='constant', constant_values=par_vals_per_i[-1])
-        elif PrOpt['h_fixed'] == -1.:
-            ...  # no change needed
-        else:
-            optimized_param = np.pad(optimized_param, (0, n - 1), mode='constant', constant_values=PrOpt['h_fixed'])
-            par_vals_per_i = np.pad(par_vals_per_i, (0, n - 1), mode='constant', constant_values=PrOpt['h_fixed'])
 
         plt.clf()
         samples = [par_vals[i], optimized_param, par_vals_per_i]
@@ -990,7 +1028,7 @@ def add_optimization(PrOpt: dict, forward_func: callable, search_dir: str, outpu
     for root, dirs, files in os.walk(search_dir):
         if file_name in files:
             root = root.replace('\\', '/')
-            root += '/' if not root.endswith('/') else None
+            root += '/' if not root.endswith('/') else ''
             directories.append(root)
     if num_proc == 1:
         for directory in directories:
@@ -1000,6 +1038,9 @@ def add_optimization(PrOpt: dict, forward_func: callable, search_dir: str, outpu
         p = cpu_count(logical=False)  # num Physical processes
         p = len(directories) if 0 < len(directories) < p else p
         p = num_proc if 0 < num_proc < p else p
+        if num_proc_grad == 0:
+            p_m = cpu_count(logical=True)  # num logical processes
+            num_proc_grad = max(1, int(p_m / p))
         process_directory = partial(add_optimization_process_directory, output_dir=output_dir, PrOpt=PrOpt,
                                     forward_func=forward_func, num_proc_grad=num_proc_grad)
         with Pool(processes=p) as pool:

@@ -147,6 +147,7 @@ def add_optimization_test():
     forward_func = ForwardHS_Eff
     PrOpt['max_iter'] = 5
     PrOpt['h_fixed'] = -1.
+    PrOpt['constant_bounds'] = ((150., 550.), (1.5, 8.5))
     add_optimization(PrOpt, forward_func=forward_func,
                      search_dir='../out/out_train', output_dir=f'',
                      num_proc=0, num_proc_grad=0)
@@ -159,6 +160,7 @@ def add_multi_optimization_test():
     for i in range(1, 3):  # [1,2]
         PrOpt['max_iter'] = i
         PrOpt['h_fixed'] = -1.
+        PrOpt['constant_bounds'] = ((150., 550.), (1.5, 8.5))
         add_optimization(PrOpt, forward_func=forward_func,
                          search_dir='../out/out_train', output_dir=f'../out/out_train/optim_{i}',
                          num_proc=0, num_proc_grad=0)

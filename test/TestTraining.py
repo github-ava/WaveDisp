@@ -9,7 +9,8 @@ from src.ForwardProb import multi_train_network
 def test_training():
     PrOpt = {  # Include combinations
         'in_dir': ['../data/data_test'],
-        'max_epochs': [200],
+        'max_epochs': [500],
+        # 'loss': [0, 1, 2, 3],  # 0: MSE, 1: MSLE, 2: MAE, 3: Huber
         # 'optimizer': [0, 1],  # 0: Adam, 1: Nadam
         # 'initializer': [0, 1, 2],  # 0: he_normal, 1:glorot_normal, 2: random_normal
         # 'activation': [0, 1, 2, 3],  # 0: relu, 1: sigmoid, 2: LeakyReLU, 3: custom_leaky_relu
