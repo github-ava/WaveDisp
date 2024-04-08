@@ -145,8 +145,10 @@ def add_optimization_test():
     PrOpt = ParametersOpt
     # forward_func = ForwardHS_First
     forward_func = ForwardHS_Eff
-    PrOpt['max_iter'] = 5
+    PrOpt['method'] = 'trust-constr'
+    PrOpt['max_iter'] = 10
     PrOpt['h_fixed'] = -1.
+    PrOpt['patience'] = 5
     PrOpt['constant_bounds'] = ((150., 550.), (1.5, 8.5))
     add_optimization(PrOpt, forward_func=forward_func,
                      search_dir='../out/out_train', output_dir=f'',

@@ -8,6 +8,7 @@ from test.TestForward import test_forward
 from test.TestGeneration import test_generation
 from test.TestTraining import test_training
 from test.TestOptimization import optimization_test, add_optimization_test, add_multi_optimization_test
+from test.TestUtilities import test_add_noise_to_cp_values
 
 if __name__ == "__main__":
     # -----------------------------------
@@ -20,5 +21,7 @@ if __name__ == "__main__":
     # optimization_test()
     # add_optimization_test()
     # add_multi_optimization_test()
+    # -----------------------------------
+    # test_add_noise_to_cp_values()
     # -----------------------------------
     pass

@@ -53,18 +53,19 @@ ParametersNN = {
     'monitor': 0,  # 0: MinMaxScaler
     'scaling': 0,  # 0: MinMaxScaler
     'loss': 2,  # 0: MSE, 1: MSLE, 2: MAE, 3: Huber
-    'model': 0,  # 0: ANN , 0: CNN
+    'model': 0,  # 0: ANN , 1: CNN
     'optimizer': 1,  # 0: Adam, 1: Nadam
     'initializer': 1,  # 0: he_normal, 1:glorot_normal, 2: random_normal
     'activation': 2,  # 0: relu, 1: sigmoid, 2: LeakyReLU, 3: custom_leaky_relu
     'batch_size': int(2 ** 8),
-    'learning_rate': 1.e-3,
+    'learning_rate': 5.e-4,
     'train_ratio': 0.80,
     'val_ratio': 0.15,
     'max_epochs': 800,
     'save_period': 10000,
     'patience': 1000,
     'num_samples': 0,  # 0: all samples
+    'kfold_nsplit': 0,  # 0: no kfold split, otherwise set nsplit for kfold (validation_set=(100/nsplit)%)
     'h_fixed': -1.,  # -1.: Cp and H  |  0: CP with flexible H for all  |  value: Cp with fixed H=value for all
     'verbose': 0,  # training 0,1,2
     'save_model': False,
@@ -81,8 +82,8 @@ ParametersOpt = {
     # No callback support (not compatible): COBYLA, TNC, SLSQP
     'method': 'trust-constr',
     'max_iter': 100,
-    'patience': 5,
-    'early_stop': 1.e-8,  # 0.: no early stop, otherwise stop if abs(misfit[i]-misfit[i-1])/misfit[i-1] < early_stop
+    'patience': 10,
+    'early_stop': 1.e-10,  # 0.: no early stop, otherwise stop if abs(misfit[i]-misfit[i-1])/misfit[i-1] < early_stop
     'grad': 'FDM',  # 'FDM', 2-point, 3-point, cs
     'hess': 'FDM',  # 'FDM', 2-point, 3-point, cs
     'grad_eps': 1.e-2,  # relative to each parameter

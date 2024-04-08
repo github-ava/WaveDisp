@@ -8,6 +8,7 @@ import joblib
 import matplotlib.pyplot as plt
 import numpy as np
 import tensorflow as tf
+from sklearn.model_selection import KFold
 from sklearn.preprocessing import MinMaxScaler
 
 
@@ -129,6 +130,8 @@ def train(PrNN: dict) -> tuple[tf.keras.Model, Any, Any, dict, np.ndarray]:
     batch_size = PrNN['batch_size']
     train_ratio = PrNN['train_ratio']
     val_ratio = PrNN['val_ratio']
+    if PrNN['kfold_nsplit'] != 0:
+        train_ratio, val_ratio = train_ratio + val_ratio, 0.
     train_samples = int(train_ratio * n_s)
     val_samples = int(val_ratio * n_s)
 
@@ -175,22 +178,10 @@ def train(PrNN: dict) -> tuple[tf.keras.Model, Any, Any, dict, np.ndarray]:
             tf.keras.layers.BatchNormalization(),
             tf.keras.layers.Dense(units=n_p + n_w, activation=activation, kernel_initializer=initializer),
             tf.keras.layers.BatchNormalization(),
-            tf.keras.layers.Dense(units=n_p + n_w, activation=activation, kernel_initializer=initializer),
-            tf.keras.layers.BatchNormalization(),
             tf.keras.layers.Dense(units=n_w, activation=activation, kernel_initializer=initializer),
             tf.keras.layers.BatchNormalization(),
             tf.keras.layers.Dense(units=n_p, activation=activation, kernel_initializer=initializer),
             tf.keras.layers.BatchNormalization(),
-            tf.keras.layers.Dense(units=n_p)
-        ])
-
-    elif PrNN['model'] == 2:
-        model = tf.keras.Sequential([
-            tf.keras.layers.Input(shape=(n_w,)),
-            tf.keras.layers.Dense(units=n_w, activation=activation, kernel_initializer=initializer),
-            tf.keras.layers.Dense(units=n_p + n_w, activation=activation, kernel_initializer=initializer),
-            tf.keras.layers.Dropout(0.1),
-            tf.keras.layers.Dense(units=n_w, activation=activation, kernel_initializer=initializer),
             tf.keras.layers.Dense(units=n_p)
         ])
     else:
@@ -246,12 +237,30 @@ def train(PrNN: dict) -> tuple[tf.keras.Model, Any, Any, dict, np.ndarray]:
 
     with open(f"{PrNN['out_dir']}model_fit_output.txt", 'w', encoding='utf-8') as f:
         with redirect_stdout(f):
-            model_history = model.fit(train_input, train_output,
-                                      epochs=PrNN['max_epochs'],
-                                      batch_size=batch_size,
-                                      validation_data=(val_input, val_output),
-                                      callbacks=[early_stopping, checkpoint_callback, epoch_progress_callback],
-                                      verbose=PrNN['verbose'])
+            if PrNN['kfold_nsplit'] == 0:
+                model_history = model.fit(train_input, train_output,
+                                          epochs=PrNN['max_epochs'],
+                                          batch_size=batch_size,
+                                          validation_data=(val_input, val_output),
+                                          callbacks=[early_stopping, checkpoint_callback, epoch_progress_callback],
+                                          verbose=PrNN['verbose'])
+                model_history = model_history.history
+            else:
+                kf = KFold(n_splits=PrNN['kfold_nsplit'], shuffle=True, random_state=42)
+                all_model_history = []
+                for train_index, val_index in kf.split(input_data_normalized):
+                    train_input, val_input = input_data_normalized[train_index], input_data_normalized[val_index]
+                    train_output, val_output = output_data_normalized[train_index], output_data_normalized[val_index]
+                    fold_history = model.fit(train_input, train_output,
+                                             epochs=PrNN['max_epochs'],
+                                             batch_size=batch_size,
+                                             validation_data=(val_input, val_output),
+                                             callbacks=[early_stopping, checkpoint_callback, epoch_progress_callback],
+                                             verbose=PrNN['verbose'])
+                    all_model_history.append(fold_history.history)
+                model_history = {}
+                for key in all_model_history[0].keys():
+                    model_history[key] = np.concatenate([fold_history[key] for fold_history in all_model_history])
     if PrNN['expr_id'] == 0:
         print('Training time: {:.3f} s'.format(time() - t))
 
@@ -266,16 +275,17 @@ def train(PrNN: dict) -> tuple[tf.keras.Model, Any, Any, dict, np.ndarray]:
         model.save(f"{PrNN['out_dir']}trained_model.keras")
         joblib.dump(scaler_input, f"{PrNN['out_dir']}scaler_input.joblib")
         joblib.dump(scaler_output, f"{PrNN['out_dir']}scaler_output.joblib")
-        json.dump(model_history.history, open(f"{PrNN['out_dir']}trained_model.json", 'w'))
+        json.dump(model_history, open(f"{PrNN['out_dir']}trained_model.json", 'w'))
 
-    # metric_names = model_history.history.keys()
+    # metric_names = model_history.keys()
     # print("Available metrics:", metric_names)
 
     test_eval_output = test_eval_output if isinstance(test_eval_output, (tuple, list)) else (test_eval_output,)
     train_valid_test_loss = np.array(
-        [model_history.history['loss'][-1], model_history.history['val_loss'][-1], test_eval_output[0]])
+        [model_history['loss'][-1], model_history['val_loss'][-1], test_eval_output[0]])
+
     print(f"Train, Valid, Test Loss ({PrNN['expr_id']}): {str(train_valid_test_loss)}")
-    return model, scaler_input, scaler_output, model_history.history, train_valid_test_loss
+    return model, scaler_input, scaler_output, model_history, train_valid_test_loss
 
 
 def history(PrNN: dict, model_history: Optional[dict] = None) -> None:

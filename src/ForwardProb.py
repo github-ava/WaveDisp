@@ -381,7 +381,7 @@ def multi_train_network(
         with open(f'{sum_dir}param_list.txt', 'a') as f:
             f.write(f"\nParams and Times -------------------------------\n")
             for idx, obj in enumerate(final_objects):
-                f.write(f"\nExperiment params -------------------------------\n")
+                f.write(f"\n[Experiment {idx}] ----------------------------------\n")
                 model_fit_output_file = os.path.join(obj['out_dir'], 'model_fit_output.txt')
                 if os.path.exists(model_fit_output_file):
                     with open(model_fit_output_file, 'r', encoding='utf-8') as f_in:
